@@ -38,7 +38,7 @@ except NameError:
     from sfm_runtime_builtins import *
 
 shapeKeysWindow = None
-shapeKeysVersion = "0.1.1"
+shapeKeysVersion = "0.1.2"
 
 class ShapeKeysWindow(QtGui.QWidget):
     def __init__(self):
@@ -266,11 +266,17 @@ class ShapeKeysWindow(QtGui.QWidget):
                         shapeKeys.remove(i)
                         invalidAnimationSet = True
                         break
-                    if shapeKeys[i].animationSet.controls[j].GetName() == shapeKeys[i].flexName.GetValue():
+                    if shapeKeys[i].animationSet.controls[j].GetName() == shapeKeys[i].flexName.GetValue() or shapeKeys[i].animationSet.controls[j].GetName() == (shapeKeys[i].flexName.GetValue().replace("left_", "")) or shapeKeys[i].animationSet.controls[j].GetName() == (shapeKeys[i].flexName.GetValue().replace("right_", "")):
                         newValue = "flexWeight"
                         if shapeKeys[i].active.GetValue():
                             newValue = "disabled"
-                        shapeKeys[i].animationSet.controls[j].channel.toAttribute.SetValue(newValue)
+                        if not hasattr(shapeKeys[i].animationSet.controls[j], "channel"):
+                            if shapeKeys[i].flexName.GetValue().startswith("left_"):
+                                shapeKeys[i].animationSet.controls[j].leftvaluechannel.toAttribute.SetValue(newValue)
+                            elif shapeKeys[i].flexName.GetValue().startswith("right_"):
+                                shapeKeys[i].animationSet.controls[j].rightvaluechannel.toAttribute.SetValue(newValue)
+                        else:
+                            shapeKeys[i].animationSet.controls[j].channel.toAttribute.SetValue(newValue)
                     if shapeKeys[i].animationSet.controls[j].GetName() == shapeKeys[i].boneName.GetValue():
                         transformInput.SetValue("element", shapeKeys[i].animationSet.controls[j].orientationChannel.toElement)
                         break
@@ -421,18 +427,16 @@ class ShapeKeysWindow(QtGui.QWidget):
         self.currentAnimationSet = animSetName
         shots = sfmApp.GetShots()
         addedShapeKey = False
+        undoDisabled = False
+        if dm.IsUndoEnabled():
+            dm.SetUndoEnabled(False)
+            undoDisabled = True
         for shot in shots:
             if shot.GetName() == shotName:
                 shapeKeys = getattr(shot, "shapeKeys", None)
                 # if shapeKeys is None, create it
                 if shapeKeys is None:
-                    undoDisabled = False
-                    if dm.IsUndoEnabled():
-                        dm.SetUndoEnabled(False)
-                        undoDisabled = True
                     shapeKeys = shot.AddAttribute("shapeKeys", vs.AT_ELEMENT_ARRAY)
-                    if undoDisabled:
-                        dm.SetUndoEnabled(True)
                 for i in range(shapeKeys.count()):
                     if shapeKeys[i].animationSet.GetName() == animSetName:
                         # Get shape key properties
@@ -472,6 +476,8 @@ class ShapeKeysWindow(QtGui.QWidget):
         self.addShapeKeyButton.setEnabled(True)
         if addedShapeKey:
             self.saveShapeKeysButton.setEnabled(True)
+        if undoDisabled:
+            dm.SetUndoEnabled(True)
     def shapeKeySelectionChanged(self):
         # get selection
         selectedItems = self.shapeKeysTable.selectedItems()
@@ -510,7 +516,7 @@ class ShapeKeysWindow(QtGui.QWidget):
                                     continue
                                 flexName = shapeKeys[i].animationSet.gameModel.globalFlexControllers[j].GetName()
                                 self.flexEdit.addItem(flexName)
-                                flexes.append(flexName.replace("left_", "").replace("right_", "").replace("multi_", ""))
+                                flexes.append(flexName.replace("left_", "").replace("right_", ""))
                                 if shapeKeys[i].animationSet.gameModel.globalFlexControllers[j].GetName() == matchingFlex:
                                     self.flexEdit.setCurrentIndex(self.flexEdit.count() - 1)
                         self.flexesInUse = storeFlexesInUse + [matchingFlex] # workaround to prevent conflict errors when setting up properties
@@ -750,8 +756,15 @@ class ShapeKeysWindow(QtGui.QWidget):
                         for j in range(shapeKeys[i].animationSet.controls.count()):
                             if shapeKeys[i].animationSet.controls[j] is None:
                                 continue
-                            if shapeKeys[i].animationSet.controls[j].GetName() == shapeKeys[i].flexName.GetValue():
-                                shapeKeys[i].animationSet.controls[j].channel.toAttribute.SetValue("flexWeight")
+                            if shapeKeys[i].animationSet.controls[j].GetName() == shapeKeys[i].flexName.GetValue() or shapeKeys[i].animationSet.controls[j].GetName() == shapeKeys[i].flexName.GetValue().replace("left_", "").replace("right_", ""):
+                                # if channel attribute doesn't exist, find "left"/"right" + "valuechannel"
+                                if not hasattr(shapeKeys[i].animationSet.controls[j], "channel"):
+                                    if shapeKeys[i].flexName.GetValue().startswith("left_"):
+                                        shapeKeys[i].animationSet.controls[j].leftvaluechannel.toAttribute.SetValue("flexWeight")
+                                    elif shapeKeys[i].flexName.GetValue().startswith("right_"):
+                                        shapeKeys[i].animationSet.controls[j].rightvaluechannel.toAttribute.SetValue("flexWeight")
+                                else:
+                                    shapeKeys[i].animationSet.controls[j].channel.toAttribute.SetValue("flexWeight")
                                 break
                         shapeKeys.remove(i)
                         break
