@@ -1,19 +1,36 @@
 # Shape Keys Window for Source Filmmaker (SFM)
-# Created by KiwifruitDev (2025)
+# Written by KiwifruitDev
+# Licensed under the MIT License
+#
+# MIT License
+# 
+# Copyright (c) 2025 KiwifruitDev
+# 
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+# 
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
 
 import sfm
-import sfmClipEditor
-import vs
-import vs.movieobjects
-import _datamodel
-from vs import g_pDataModel as dm
-import socket
-import os
-import json
 import sfmApp
-import time
+import json
+import vs
+from vs import g_pDataModel as dm
 from PySide import QtGui, QtCore, shiboken
-from atexit import register
 
 try:
     sfm
@@ -21,14 +38,19 @@ except NameError:
     from sfm_runtime_builtins import *
 
 shapeKeysWindow = None
-shapeKeysVersion = "0.1.0"
+shapeKeysVersion = "0.1.1"
 
 class ShapeKeysWindow(QtGui.QWidget):
     def __init__(self):
+        """
+        Initialize the Shape Keys Window UI and state.
+        Sets up all widgets, layouts, and connects signals.
+        """
         super(ShapeKeysWindow, self).__init__()
+        self.flexesInUse = []
         self.currentlyRefreshing = False
-        self.currentShotUniqueId = "shot1"
-        self.currentAnimationSetUniqueId = "shot1"
+        self.currentShot = "shot1"
+        self.currentAnimationSet = "shot1"
         self.currentShapeKeyUniqueId = "00000000-0000-0000-0000-000000000000"
 
         # Layout
@@ -56,14 +78,10 @@ class ShapeKeysWindow(QtGui.QWidget):
         self.animationSetDropdown.setSizePolicy(QtGui.QSizePolicy.Expanding, QtGui.QSizePolicy.Fixed)
         self.controlPanel.addWidget(self.animationSetDropdown, 1)
         self.refreshButton = QtGui.QPushButton("Refresh")
-        self.refreshButton.setToolTip("Refresh the list of shots, animation sets, and shape keys")
+        self.refreshButton.setToolTip("Regenerate the shape key operators and refresh the list of shots, animation sets, and shape keys")
         self.controlPanel.addStretch(1)
         self.controlPanel.addWidget(self.refreshButton, 0, QtCore.Qt.AlignRight)
         self.refreshButton.clicked.connect(self.refreshShapeKeys)
-        self.regenerateButton = QtGui.QPushButton("Regenerate")
-        self.regenerateButton.setToolTip("Regenerate the operators for all shape keys in the current shot")
-        self.controlPanel.addWidget(self.regenerateButton, 0, QtCore.Qt.AlignRight)
-        self.regenerateButton.clicked.connect(self.generateOperators)
         self.shotDropdown.currentIndexChanged.connect(self.shotChanged)
         self.animationSetDropdown.currentIndexChanged.connect(self.animationSetChanged)
 
@@ -116,12 +134,12 @@ class ShapeKeysWindow(QtGui.QWidget):
         self.shapeKeysButtonsLayout = QtGui.QHBoxLayout()
         self.shapeKeysButtonsLayout.setContentsMargins(0, 0, 0, 0)
         self.topLayout.addLayout(self.shapeKeysButtonsLayout)
-        self.loadShapeKeysButton = QtGui.QPushButton("Load")
+        self.loadShapeKeysButton = QtGui.QPushButton("Import")
         self.loadShapeKeysButton.setEnabled(False)
         self.loadShapeKeysButton.setToolTip("Load shape keys from a JSON file")
         self.loadShapeKeysButton.clicked.connect(self.loadShapeKeys)
         self.shapeKeysButtonsLayout.addWidget(self.loadShapeKeysButton)
-        self.saveShapeKeysButton = QtGui.QPushButton("Save")
+        self.saveShapeKeysButton = QtGui.QPushButton("Export")
         self.saveShapeKeysButton.setEnabled(False)
         self.saveShapeKeysButton.setToolTip("Save shape keys to a JSON file")
         self.saveShapeKeysButton.clicked.connect(self.saveShapeKeys)
@@ -161,11 +179,9 @@ class ShapeKeysWindow(QtGui.QWidget):
         self.shapeKeyNameEdit.textChanged.connect(self.shapeKeyNameChanged)
         self.shapeKeyDetailsLayout.addRow("Name:", self.shapeKeyNameEdit)
         self.shapeKeyActiveCheckbox = QtGui.QCheckBox()
-        self.shapeKeyActiveCheckbox.setToolTip("Whether this shape key is active")
+        self.shapeKeyActiveCheckbox.setToolTip("Whether this shape key is active. When active, animation for the chosen flex will be disabled in order to be controlled by this shape key.")
         self.shapeKeyActiveCheckbox.stateChanged.connect(self.shapeKeyActiveChanged)
         self.shapeKeyDetailsLayout.addRow("Active:", self.shapeKeyActiveCheckbox)
-        self.flexWarningLabel = QtGui.QLabel("Do not share flexes between multiple shape keys!")
-        self.shapeKeyDetailsLayout.addRow(self.flexWarningLabel)
         self.flexEdit = QtGui.QComboBox()
         self.flexEdit.setToolTip("Select the flex to control")
         self.flexEdit.currentIndexChanged.connect(self.flexChanged)
@@ -183,38 +199,30 @@ class ShapeKeysWindow(QtGui.QWidget):
         self.maxFlexRangeSpin.valueChanged.connect(self.maxFlexRangeChanged)
         self.shapeKeyDetailsLayout.addRow("Max Flex Range:", self.maxFlexRangeSpin)
         self.boneEdit = QtGui.QComboBox()
-        self.boneEdit.setToolTip("Select the bone to monitor")
+        self.boneEdit.setToolTip("Select the bone to influence the flex value.")
         self.boneEdit.currentIndexChanged.connect(self.boneChanged)
         self.shapeKeyDetailsLayout.addRow("Bone:", self.boneEdit)
         self.boneAxisEdit = QtGui.QComboBox()
-        self.boneAxisEdit.setToolTip("Select the axis of the bone to monitor")
+        self.boneAxisEdit.setToolTip("Select the axis of rotation for this bone.")
         self.boneAxisEdit.addItems(["X", "Y", "Z"])
         self.boneAxisEdit.currentIndexChanged.connect(self.boneAxisChanged)
         self.shapeKeyDetailsLayout.addRow("Bone Axis:", self.boneAxisEdit)
         self.minBoneRangeSpin = QtGui.QDoubleSpinBox()
-        self.minBoneRangeSpin.setToolTip("Minimum bone value")
+        self.minBoneRangeSpin.setToolTip("The minimum rotation on the chosen axis for this bone for the flex value to reach 0.")
         self.minBoneRangeSpin.setRange(-360.0, 360.0)
         self.minBoneRangeSpin.setSingleStep(1.0)
         self.minBoneRangeSpin.valueChanged.connect(self.minBoneRangeChanged)
         self.shapeKeyDetailsLayout.addRow("Min Bone Range:", self.minBoneRangeSpin)
         self.maxBoneRangeSpin = QtGui.QDoubleSpinBox()
-        self.maxBoneRangeSpin.setToolTip("Maximum bone value")
+        self.maxBoneRangeSpin.setToolTip("The maximum rotation on the chosen axis for this bone for the flex value to reach 1.")
         self.maxBoneRangeSpin.setRange(-360.0, 360.0)
         self.maxBoneRangeSpin.setSingleStep(1.0)
         self.maxBoneRangeSpin.valueChanged.connect(self.maxBoneRangeChanged)
         self.shapeKeyDetailsLayout.addRow("Max Bone Range:", self.maxBoneRangeSpin)
         self.clampCheckbox = QtGui.QCheckBox()
-        self.clampCheckbox.setToolTip("Clamp the flex value to the min/max range")
+        self.clampCheckbox.setToolTip("Keeps the flex value within its min/max range, even if the bone value goes beyond its limits. Prevents extreme or unwanted flex movement.")
         self.clampCheckbox.stateChanged.connect(self.clampChanged)
         self.shapeKeyDetailsLayout.addRow("Clamp:", self.clampCheckbox)
-
-        # Hide min/max flex ranges and clamp (they are not implemented yet)
-        self.shapeKeyDetailsLayout.labelForField(self.minFlexRangeSpin).setVisible(False)
-        self.minFlexRangeSpin.setVisible(False)
-        self.shapeKeyDetailsLayout.labelForField(self.maxFlexRangeSpin).setVisible(False)
-        self.maxFlexRangeSpin.setVisible(False)
-        self.shapeKeyDetailsLayout.labelForField(self.clampCheckbox).setVisible(False)
-        self.clampCheckbox.setVisible(False)
 
         # Status bar
         self.statusBar = QtGui.QLabel()
@@ -223,10 +231,14 @@ class ShapeKeysWindow(QtGui.QWidget):
 
         self.refreshShapeKeys()
     def generateOperators(self):
+        """
+        Regenerates SFM operators for all shape keys in all shots.
+        Handles undo context safely.
+        """
         undoDisabled = False
         if dm.IsUndoEnabled():
             dm.SetUndoEnabled(False)
-        undoDisabled = True
+            undoDisabled = True
         shots = sfmApp.GetShots()
         for shot in shots:
             for i in range(shot.operators.count()):
@@ -243,92 +255,99 @@ class ShapeKeysWindow(QtGui.QWidget):
                     generatedOperators.remove(0)
                 # Create new operators based on the shape key properties
                 prefix = shapeKeys[i].GetName() + "_" + shapeKeys[i].animationSet.GetName() + "_" + shapeKeys[i].boneName.GetValue() + "_" + shapeKeys[i].flexName.GetValue() + "_"
-                transform = vs.CreateElement("DmeConnectionOperator", prefix + "transform", shot.GetFileId())
+                transform = vs.CreateElement("DmeConnectionOperator", (prefix + "transform").encode('utf-8'), shot.GetFileId())
                 transform = generatedOperators[generatedOperators.AddToTail(transform)]
-                transformInput = vs.CreateElement("DmeAttributeReference", prefix + "transform_input", shot.GetFileId())
+                transformInput = vs.CreateElement("DmeAttributeReference", (prefix + "transform_input").encode('utf-8'), shot.GetFileId())
                 transform.SetValue("input", transformInput)
+                invalidAnimationSet = False
                 for j in range(shapeKeys[i].animationSet.controls.count()):
+                    if getattr(shapeKeys[i].animationSet, "gameModel", None) is None:
+                        # remove this shape key, as its animation set is invalid
+                        shapeKeys.remove(i)
+                        invalidAnimationSet = True
+                        break
                     if shapeKeys[i].animationSet.controls[j].GetName() == shapeKeys[i].flexName.GetValue():
                         newValue = "flexWeight"
                         if shapeKeys[i].active.GetValue():
                             newValue = "disabled"
                         shapeKeys[i].animationSet.controls[j].channel.toAttribute.SetValue(newValue)
                     if shapeKeys[i].animationSet.controls[j].GetName() == shapeKeys[i].boneName.GetValue():
-                        print(shapeKeys[i].animationSet.controls[j])
                         transformInput.SetValue("element", shapeKeys[i].animationSet.controls[j].orientationChannel.toElement)
                         break
+                if invalidAnimationSet:
+                    continue # skip the rest of this loop iteration
                 transformInput.attribute.SetValue("orientation")
-                transformOutput = vs.CreateElement("DmeAttributeReference", prefix + "transform_output", shot.GetFileId())
+                transformOutput = vs.CreateElement("DmeAttributeReference", (prefix + "transform_output").encode('utf-8'), shot.GetFileId())
                 transform.outputs.AddToTail(transformOutput)
-                unpack = vs.CreateElement("DmeUnpackQuaternionOperator", prefix + "unpack", shot.GetFileId())
+                unpack = vs.CreateElement("DmeUnpackQuaternionOperator", (prefix + "unpack").encode('utf-8'), shot.GetFileId())
                 unpack = generatedOperators[generatedOperators.AddToTail(unpack)]
                 transformOutput.SetValue("element", unpack)
                 transformOutput.attribute.SetValue("quaternion")
                 wName = prefix + "w"
-                w = vs.CreateElement("DmeConnectionOperator", wName.encode('utf-8'), shot.GetFileId())
+                w = vs.CreateElement("DmeConnectionOperator", (wName).encode('utf-8'), shot.GetFileId())
                 w = generatedOperators[generatedOperators.AddToTail(w)]
-                wInput = vs.CreateElement("DmeAttributeReference", prefix + "w_input", shot.GetFileId())
+                wInput = vs.CreateElement("DmeAttributeReference", (prefix + "w_input").encode('utf-8'), shot.GetFileId())
                 w.SetValue("input", wInput)
                 wInput.SetValue("element", unpack)
                 wInput.attribute.SetValue("w")
-                wOutput = vs.CreateElement("DmeAttributeReference", prefix + "w_output", shot.GetFileId())
+                wOutput = vs.CreateElement("DmeAttributeReference", (prefix + "w_output").encode('utf-8'), shot.GetFileId())
                 w.outputs.AddToTail(wOutput)
-                eval = vs.CreateElement("DmeExpressionOperator", prefix + "eval", shot.GetFileId())
+                eval = vs.CreateElement("DmeExpressionOperator", (prefix + "eval").encode('utf-8'), shot.GetFileId())
                 wOutput.SetValue("element", eval)
                 eval = generatedOperators[generatedOperators.AddToTail(eval)]
                 isX = "rtod(atan2(2*(w*x + y*z), 1 - 2*(x*x + y*y)))"
                 isY = "rtod(asin(clamp(2*(w*y - z*x), -1, 1)))"
                 isZ = "rtod(atan2(2*(w*z + x*y), 1 - 2*(y*y + z*z)))"
                 axisExpr = {"X": isX, "Y": isY, "Z": isZ}.get(shapeKeys[i].boneAxis.GetValue().upper(), isX)
-                if shapeKeys[i].clamp.GetValue():
-                    # todo: change flex range from 0-1 to min/max flex range
-                    pass
-                    #axisExpr = "" % (axisExpr, shapeKeys[i].minFlexRange.GetValue(), shapeKeys[i].maxFlexRange.GetValue())
                 axisExpr = "ramp(%s, %f, %f)" % (axisExpr, shapeKeys[i].minBoneRange.GetValue(), shapeKeys[i].maxBoneRange.GetValue())
+                if shapeKeys[i].clamp.GetValue():
+                    axisExpr = "clamp(%s, 0, 1)" % axisExpr
+                # Map flex range from minFlexRange to maxFlexRange
+                axisExpr = "lerp(%s, %f, %f)" % (axisExpr, shapeKeys[i].minFlexRange.GetValue(), shapeKeys[i].maxFlexRange.GetValue())
                 eval.expr.SetValue(axisExpr)
                 eval.AddAttribute("w", vs.AT_FLOAT)
                 eval.AddAttribute("x", vs.AT_FLOAT)
                 eval.AddAttribute("y", vs.AT_FLOAT)
                 eval.AddAttribute("z", vs.AT_FLOAT)
                 wOutput.attribute.SetValue("w")
-                x = vs.CreateElement("DmeConnectionOperator", prefix + "x", shot.GetFileId())
+                x = vs.CreateElement("DmeConnectionOperator", (prefix + "x").encode('utf-8'), shot.GetFileId())
                 x = generatedOperators[generatedOperators.AddToTail(x)]
-                xInput = vs.CreateElement("DmeAttributeReference", prefix + "x_input", shot.GetFileId())
+                xInput = vs.CreateElement("DmeAttributeReference", (prefix + "x_input").encode('utf-8'), shot.GetFileId())
                 x.SetValue("input", xInput)
                 xInput.SetValue("element", unpack)
                 xInput.attribute.SetValue("x")
-                xOutput = vs.CreateElement("DmeAttributeReference", prefix + "x_output", shot.GetFileId())
+                xOutput = vs.CreateElement("DmeAttributeReference", (prefix + "x_output").encode('utf-8'), shot.GetFileId())
                 x.outputs.AddToTail(xOutput)
                 xOutput.SetValue("element", eval)
                 xOutput.attribute.SetValue("x")
-                y = vs.CreateElement("DmeConnectionOperator", prefix + "y", shot.GetFileId())
+                y = vs.CreateElement("DmeConnectionOperator", (prefix + "y").encode('utf-8'), shot.GetFileId())
                 y = generatedOperators[generatedOperators.AddToTail(y)]
-                yInput = vs.CreateElement("DmeAttributeReference", prefix + "y_input", shot.GetFileId())
+                yInput = vs.CreateElement("DmeAttributeReference", (prefix + "y_input").encode('utf-8'), shot.GetFileId())
                 y.SetValue("input", yInput)
                 yInput.SetValue("element", unpack)
                 yInput.attribute.SetValue("y")
-                yOutput = vs.CreateElement("DmeAttributeReference", prefix + "y_output", shot.GetFileId())
+                yOutput = vs.CreateElement("DmeAttributeReference", (prefix + "y_output").encode('utf-8'), shot.GetFileId())
                 y.outputs.AddToTail(yOutput)
                 yOutput.SetValue("element", eval)
                 yOutput.attribute.SetValue("y")
-                z = vs.CreateElement("DmeConnectionOperator", prefix + "z", shot.GetFileId())
+                z = vs.CreateElement("DmeConnectionOperator", (prefix + "z").encode('utf-8'), shot.GetFileId())
                 z = generatedOperators[generatedOperators.AddToTail(z)]
-                zInput = vs.CreateElement("DmeAttributeReference", prefix + "z_input", shot.GetFileId())
+                zInput = vs.CreateElement("DmeAttributeReference", (prefix + "z_input").encode('utf-8'), shot.GetFileId())
                 z.SetValue("input", zInput)
                 zInput.SetValue("element", unpack)
                 zInput.attribute.SetValue("z")
-                zOutput = vs.CreateElement("DmeAttributeReference", prefix + "z_output", shot.GetFileId())
+                zOutput = vs.CreateElement("DmeAttributeReference", (prefix + "z_output").encode('utf-8'), shot.GetFileId())
                 z.outputs.AddToTail(zOutput)
                 zOutput.SetValue("element", eval)
                 zOutput.attribute.SetValue("z")
                 generatedOperators.AddToTail(z)
-                result = vs.CreateElement("DmeConnectionOperator", prefix + "result", shot.GetFileId())
+                result = vs.CreateElement("DmeConnectionOperator", (prefix + "result").encode('utf-8'), shot.GetFileId())
                 result = generatedOperators[generatedOperators.AddToTail(result)]
-                resultInput = vs.CreateElement("DmeAttributeReference", prefix + "result_input", shot.GetFileId())
+                resultInput = vs.CreateElement("DmeAttributeReference", (prefix + "result_input").encode('utf-8'), shot.GetFileId())
                 result.SetValue("input", resultInput)
                 resultInput.SetValue("element", eval)
                 resultInput.attribute.SetValue("result")
-                resultOutput = vs.CreateElement("DmeAttributeReference", prefix + "result_output", shot.GetFileId())
+                resultOutput = vs.CreateElement("DmeAttributeReference", (prefix + "result_output").encode('utf-8'), shot.GetFileId())
                 result.outputs.AddToTail(resultOutput)
                 for j in range(shapeKeys[i].animationSet.gameModel.globalFlexControllers.count()):
                     if shapeKeys[i].animationSet.gameModel.globalFlexControllers[j].GetName() == shapeKeys[i].flexName.GetValue():
@@ -345,6 +364,7 @@ class ShapeKeysWindow(QtGui.QWidget):
         if self.currentlyRefreshing == True:
             return
         self.currentlyRefreshing = True
+        self.flexesInUse = []
         hasDocument = sfmApp.HasDocument()
         self.shotDropdown.clear()
         self.animationSetDropdown.clear()
@@ -371,12 +391,17 @@ class ShapeKeysWindow(QtGui.QWidget):
         shotName = self.shotDropdown.itemText(index)
         self.currentShot = shotName
         shots = sfmApp.GetShots()
+        currentAnimationSet = self.currentAnimationSet
         for shot in shots:
             if shot.GetName() == shotName:
                 animationSets = shot.animationSets
                 for i in range(animationSets.count()):
+                    # must have gameModel attribute
+                    if getattr(animationSets[i], "gameModel", None) is None:
+                        continue
                     self.animationSetDropdown.addItem(animationSets[i].GetName())
-                    if animationSets[i].GetName() == self.currentAnimationSet:
+                    self.currentAnimationSet = currentAnimationSet
+                    if animationSets[i].GetName() == currentAnimationSet:
                         self.animationSetDropdown.setCurrentIndex(self.animationSetDropdown.count() - 1)
                 break
     def animationSetChanged(self, index):
@@ -414,6 +439,7 @@ class ShapeKeysWindow(QtGui.QWidget):
                         active = shapeKeys[i].active.GetValue()
                         flexName = shapeKeys[i].flexName.GetValue()
                         boneName = shapeKeys[i].boneName.GetValue()
+                        self.flexesInUse.append(flexName)
                         # Populate the table with this shape key
                         rowPosition = self.shapeKeysTable.rowCount()
                         self.shapeKeysTable.insertRow(rowPosition)
@@ -476,12 +502,18 @@ class ShapeKeysWindow(QtGui.QWidget):
                         matchingFlex = shapeKeys[i].flexName.GetValue()
                         self.flexEdit.clear()
                         flexes = []
+                        storeFlexesInUse = self.flexesInUse[:]
+                        self.flexesInUse =  []
                         if shapeKeys[i].animationSet:
                             for j in range(shapeKeys[i].animationSet.gameModel.globalFlexControllers.count()):
-                                self.flexEdit.addItem(shapeKeys[i].animationSet.gameModel.globalFlexControllers[j].GetName())
-                                flexes.append(shapeKeys[i].animationSet.gameModel.globalFlexControllers[j].GetName())
+                                if shapeKeys[i].animationSet.gameModel.globalFlexControllers[j] is None:
+                                    continue
+                                flexName = shapeKeys[i].animationSet.gameModel.globalFlexControllers[j].GetName()
+                                self.flexEdit.addItem(flexName)
+                                flexes.append(flexName.replace("left_", "").replace("right_", "").replace("multi_", ""))
                                 if shapeKeys[i].animationSet.gameModel.globalFlexControllers[j].GetName() == matchingFlex:
                                     self.flexEdit.setCurrentIndex(self.flexEdit.count() - 1)
+                        self.flexesInUse = storeFlexesInUse + [matchingFlex] # workaround to prevent conflict errors when setting up properties
                         self.minFlexRangeSpin.setValue(shapeKeys[i].minFlexRange.GetValue() if hasattr(shapeKeys[i], "minFlexRange") else 0.0)
                         self.maxFlexRangeSpin.setValue(shapeKeys[i].maxFlexRange.GetValue() if hasattr(shapeKeys[i], "maxFlexRange") else 1.0)
                         # Populate bone dropdown
@@ -489,6 +521,8 @@ class ShapeKeysWindow(QtGui.QWidget):
                         self.boneEdit.clear()
                         if shapeKeys[i].animationSet:
                             for j in range(shapeKeys[i].animationSet.controls.count()):
+                                if shapeKeys[i].animationSet.controls[j] is None:
+                                    continue
                                 # the name cannot be the same as a flex
                                 if shapeKeys[i].animationSet.controls[j].GetName() not in flexes:
                                     self.boneEdit.addItem(shapeKeys[i].animationSet.controls[j].GetName())
@@ -502,9 +536,113 @@ class ShapeKeysWindow(QtGui.QWidget):
                         self.clampCheckbox.setChecked(shapeKeys[i].clamp.GetValue() if hasattr(shapeKeys[i], "clamp") else True)
                         break
     def loadShapeKeys(self):
-        print("Not implemented: loadShapeKeys")
+        """
+        Loads shape keys from a JSON file and adds them to the current animation set.
+        Provides error handling and validation.
+        """
+        # Load shape keys from a JSON file and add them to the current animation set
+        shotName = self.shotDropdown.currentText()
+        animSetName = self.animationSetDropdown.currentText()
+        options = QtGui.QFileDialog.Options()
+        options |= QtGui.QFileDialog.DontUseNativeDialog
+        fileName, _ = QtGui.QFileDialog.getOpenFileName(self, "Load Shape Keys", "", "JSON Files (*.json);;All Files (*)", options=options)
+        if fileName:
+            undoDisabled = False
+            if dm.IsUndoEnabled():
+                dm.SetUndoEnabled(False)
+                undoDisabled = True
+            try:
+                with open(fileName, 'r') as f:
+                    shapeKeysToLoad = json.load(f)
+                if not isinstance(shapeKeysToLoad, list):
+                    QtGui.QMessageBox.warning(self, "Shape Keys: Error", "Invalid shape keys file format. Expected a list of shape keys.")
+                    return
+                shots = sfmApp.GetShots()
+                for shot in shots:
+                    if shot.GetName() == shotName:
+                        shapeKeys = getattr(shot, "shapeKeys", None)
+                        if shapeKeys is None:
+                            shapeKeys = shot.AddAttribute("shapeKeys", vs.AT_ELEMENT_ARRAY)
+                        for shapeKeyData in shapeKeysToLoad:
+                            if not isinstance(shapeKeyData, dict):
+                                QtGui.QMessageBox.warning(self, "Shape Keys: Error", "Malformed shape key entry: %s" % str(shapeKeyData))
+                                continue
+                            name = shapeKeyData.get("name", "").strip()
+                            flexName = shapeKeyData.get("flexName", "").strip()
+                            boneName = shapeKeyData.get("boneName", "").strip()
+                            if not name or not flexName or not boneName:
+                                QtGui.QMessageBox.warning(self, "Shape Keys: Error", "Missing required fields in shape key: %s" % str(shapeKeyData))
+                                continue
+                            if flexName in self.flexesInUse:
+                                QtGui.QMessageBox.warning(self, "Shape Keys: Error", "Could not import Shape Key '%s'\nFlex '%s' is already in use by another shape key" % (name, flexName))
+                                continue
+                            newShapeKey = vs.CreateElement("DmElement", name.encode('utf-8'), shot.GetFileId())
+                            newShapeKey = shapeKeys[shapeKeys.AddToTail(newShapeKey)]
+                            newShapeKey.AddAttribute("active", vs.AT_BOOL).SetValue(shapeKeyData.get("active", True))
+                            newShapeKey.AddAttribute("flexName", vs.AT_STRING).SetValue(flexName.encode('utf-8'))
+                            newShapeKey.AddAttribute("boneName", vs.AT_STRING).SetValue(boneName.encode('utf-8'))
+                            newShapeKey.AddAttribute("minFlexRange", vs.AT_FLOAT).SetValue(shapeKeyData.get("minFlexRange", 0.0))
+                            newShapeKey.AddAttribute("maxFlexRange", vs.AT_FLOAT).SetValue(shapeKeyData.get("maxFlexRange", 1.0))
+                            newShapeKey.AddAttribute("boneAxis", vs.AT_STRING).SetValue(shapeKeyData.get("boneAxis", "X").upper().encode('utf-8'))
+                            newShapeKey.AddAttribute("minBoneRange", vs.AT_FLOAT).SetValue(shapeKeyData.get("minBoneRange", 0.0))
+                            newShapeKey.AddAttribute("maxBoneRange", vs.AT_FLOAT).SetValue(shapeKeyData.get("maxBoneRange", 90.0))
+                            newShapeKey.AddAttribute("clamp", vs.AT_BOOL).SetValue(shapeKeyData.get("clamp", True))
+                            newShapeKey.AddAttribute("generatedOperators", vs.AT_ELEMENT_ARRAY)
+                            animationSetAttribute = newShapeKey.AddAttribute("animationSet", vs.AT_ELEMENT)
+                            for i in range(shot.animationSets.count()):
+                                if shot.animationSets[i].GetName() == animSetName:
+                                    animationSetAttribute.SetValue(shot.animationSets[i])
+                                    break
+                            self.flexesInUse.append(flexName)
+            except Exception as e:
+                QtGui.QMessageBox.critical(self, "Shape Keys: Error", "Failed to load shape keys: %s" % str(e))
+            if undoDisabled:
+                dm.SetUndoEnabled(True)
+            self.refreshShapeKeys()
+            self.animationSetChanged(self.animationSetDropdown.currentIndex())
     def saveShapeKeys(self):
-        print("Not implemented: saveShapeKeys")
+        # Save the current animation set's shape keys to a JSON file
+        shotName = self.shotDropdown.currentText()
+        animSetName = self.animationSetDropdown.currentText()
+        shots = sfmApp.GetShots()
+        for shot in shots:
+            if shot.GetName() == shotName:
+                shapeKeys = getattr(shot, "shapeKeys", None)
+                if shapeKeys is None:
+                    QtGui.QMessageBox.warning(self, "Shape Keys: Error", "No shape keys to save")
+                    return
+                shapeKeysToSave = []
+                for i in range(shapeKeys.count()):
+                    if shapeKeys[i].animationSet.GetName() == animSetName:
+                        shapeKeyData = {
+                            "name": shapeKeys[i].name.GetValue(),
+                            "active": shapeKeys[i].active.GetValue(),
+                            "flexName": shapeKeys[i].flexName.GetValue(),
+                            "boneName": shapeKeys[i].boneName.GetValue(),
+                            "minFlexRange": shapeKeys[i].minFlexRange.GetValue() if hasattr(shapeKeys[i], "minFlexRange") else 0.0,
+                            "maxFlexRange": shapeKeys[i].maxFlexRange.GetValue() if hasattr(shapeKeys[i], "maxFlexRange") else 1.0,
+                            "boneAxis": shapeKeys[i].boneAxis.GetValue() if hasattr(shapeKeys[i], "boneAxis") else "X",
+                            "minBoneRange": shapeKeys[i].minBoneRange.GetValue() if hasattr(shapeKeys[i], "minBoneRange") else 0.0,
+                            "maxBoneRange": shapeKeys[i].maxBoneRange.GetValue() if hasattr(shapeKeys[i], "maxBoneRange") else 90.0,
+                            "clamp": shapeKeys[i].clamp.GetValue() if hasattr(shapeKeys[i], "clamp") else True,
+                        }
+                        shapeKeysToSave.append(shapeKeyData)
+                if not shapeKeysToSave:
+                    QtGui.QMessageBox.warning(self, "Shape Keys: Error", "No shape keys to save for the selected animation set")
+                    return
+                options = QtGui.QFileDialog.Options()
+                options |= QtGui.QFileDialog.DontUseNativeDialog
+                fileName, _ = QtGui.QFileDialog.getSaveFileName(self, "Save Shape Keys", "", "JSON Files (*.json);;All Files (*)", options=options)
+                if fileName:
+                    try:
+                        # Append .json extension if not present
+                        if not fileName.lower().endswith('.json'):
+                            fileName += '.json'
+                        with open(fileName, 'w') as f:
+                            json.dump(shapeKeysToSave, f, indent=4)
+                        QtGui.QMessageBox.information(self, "Shape Keys: Success", "Shape keys saved successfully")
+                    except Exception as e:
+                        QtGui.QMessageBox.critical(self, "Shape Keys: Error", "Failed to save shape keys: %s" % str(e))
     def addShapeKey(self):
         # Dialog box to set name and select flex/bone
         dialog = QtGui.QDialog(self)
@@ -515,8 +653,6 @@ class ShapeKeysWindow(QtGui.QWidget):
         nameEdit.setText("shapeKey%d" % (self.shapeKeysTable.rowCount() + 1))
         dialogLayout.addRow("Name:", nameEdit)
         flexEdit = QtGui.QComboBox()
-        flexWarningLabel = QtGui.QLabel("Do not share flexes between multiple shape keys!")
-        dialogLayout.addRow(flexWarningLabel)
         dialogLayout.addRow("Flex:", flexEdit)
         boneEdit = QtGui.QComboBox()
         dialogLayout.addRow("Bone:", boneEdit)
@@ -532,12 +668,19 @@ class ShapeKeysWindow(QtGui.QWidget):
             if shot.GetName() == shotName:
                 for i in range(shot.animationSets.count()):
                     if shot.animationSets[i].GetName() == animSetName:
-                        flexes = shot.animationSets[i].gameModel.globalFlexControllers
-                        for j in range(flexes.count()):
-                            flexEdit.addItem(flexes[j].GetName())
+                        flexes = []
+                        for j in range(shot.animationSets[i].gameModel.globalFlexControllers.count()):
+                            if shot.animationSets[i].gameModel.globalFlexControllers[j] is None:
+                                continue
+                            flexName = shot.animationSets[i].gameModel.globalFlexControllers[j].GetName()
+                            flexEdit.addItem(flexName)
+                            flexes.append(flexName)
+                            flexes.append(flexName.replace("left_", "").replace("right_", "").replace("multi_", ""))
                         for j in range(shot.animationSets[i].controls.count()):
+                            if shot.animationSets[i].controls[j] is None:
+                                continue
                             # the name cannot be the same as a flex
-                            if shot.animationSets[i].controls[j].GetName() not in [flex.GetName() for flex in flexes]:
+                            if shot.animationSets[i].controls[j].GetName() not in flexes:
                                 boneEdit.addItem(shot.animationSets[i].controls[j].GetName())
                         break
                 break
@@ -546,30 +689,27 @@ class ShapeKeysWindow(QtGui.QWidget):
             flexName = flexEdit.currentText()
             boneName = boneEdit.currentText()
             if not name:
-                QtGui.QMessageBox.warning(self, "Error", "Name cannot be empty")
+                QtGui.QMessageBox.warning(self, "Shape Keys: Error", "Name cannot be empty")
                 return
             if not flexName:
-                QtGui.QMessageBox.warning(self, "Error", "Flex must be selected")
+                QtGui.QMessageBox.warning(self, "Shape Keys: Error", "Flex must be selected")
+                return
+            if flexName in self.flexesInUse:
+                QtGui.QMessageBox.warning(self, "Shape Keys: Error", "Flex '%s' is already in use by another shape key" % flexName)
                 return
             if not boneName:
-                QtGui.QMessageBox.warning(self, "Error", "Bone must be selected")
+                QtGui.QMessageBox.warning(self, "Shape Keys: Error", "Bone must be selected")
                 return
             # Add the shape key to the shot's shapeKeys array
+            undoDisabled = False
+            if dm.IsUndoEnabled():
+                dm.SetUndoEnabled(False)
+                undoDisabled = True
             for shot in shots:
                 if shot.GetName() == shotName:
                     shapeKeys = getattr(shot, "shapeKeys", None)
                     if shapeKeys is None:
-                        undoDisabled = False
-                        if dm.IsUndoEnabled():
-                            dm.SetUndoEnabled(False)
-                            undoDisabled = True
                         shapeKeys = shot.AddAttribute("shapeKeys", vs.AT_ELEMENT_ARRAY)
-                        if undoDisabled:
-                            dm.SetUndoEnabled(True)
-                    undoDisabled = False
-                    if dm.IsUndoEnabled():
-                        dm.SetUndoEnabled(False)
-                        undoDisabled = True
                     newShapeKey = vs.CreateElement("DmElement", name.encode('utf-8'), shot.GetFileId())
                     newShapeKey.AddAttribute("active", vs.AT_BOOL).SetValue(True)
                     newShapeKey.AddAttribute("flexName", vs.AT_STRING).SetValue(flexName.encode('utf-8'))
@@ -586,15 +726,19 @@ class ShapeKeysWindow(QtGui.QWidget):
                             newShapeKey.AddAttribute("animationSet", vs.AT_ELEMENT).SetValue(shot.animationSets[i])
                             break
                     shapeKeys.AddToTail(newShapeKey)
-                    if undoDisabled:
-                        dm.SetUndoEnabled(True)
-                    self.refreshShapeKeys()
+            self.refreshShapeKeys()
+            if undoDisabled:
+                dm.SetUndoEnabled(True)
     def removeShapeKey(self):
         if not self.currentShapeKeyUniqueId:
             return
         shotName = self.shotDropdown.currentText()
         animSetName = self.animationSetDropdown.currentText()
         shots = sfmApp.GetShots()
+        undoDisabled = False
+        if dm.IsUndoEnabled():
+            dm.SetUndoEnabled(False)
+            undoDisabled = True
         for shot in shots:
             if shot.GetName() == shotName:
                 shapeKeys = getattr(shot, "shapeKeys", None)
@@ -603,19 +747,17 @@ class ShapeKeysWindow(QtGui.QWidget):
                 for i in range(shapeKeys.count()):
                     if shapeKeys[i].GetId().__str__() == self.currentShapeKeyUniqueId and shapeKeys[i].animationSet.name.GetValue() == animSetName:
                         # Found the shape key, remove it
-                        undoDisabled = False
-                        if dm.IsUndoEnabled():
-                            dm.SetUndoEnabled(False)
-                            undoDisabled = True
                         for j in range(shapeKeys[i].animationSet.controls.count()):
+                            if shapeKeys[i].animationSet.controls[j] is None:
+                                continue
                             if shapeKeys[i].animationSet.controls[j].GetName() == shapeKeys[i].flexName.GetValue():
                                 shapeKeys[i].animationSet.controls[j].channel.toAttribute.SetValue("flexWeight")
                                 break
                         shapeKeys.remove(i)
-                        if undoDisabled:
-                            dm.SetUndoEnabled(True)
                         break
                 break
+        if undoDisabled:
+            dm.SetUndoEnabled(True)
         self.currentShapeKeyUniqueId = "00000000-0000-0000-0000-000000000000"
         self.refreshShapeKeys()
     def shapeKeyNameChanged(self, text):
@@ -683,6 +825,20 @@ class ShapeKeysWindow(QtGui.QWidget):
         shotName = self.shotDropdown.currentText()
         animSetName = self.animationSetDropdown.currentText()
         flexName = self.flexEdit.itemText(index)
+        if flexName in self.flexesInUse and flexName != self.shapeKeysTable.item(self.shapeKeysTable.currentRow(), 1).text():
+            QtGui.QMessageBox.warning(self, "Shape Keys: Error", "Flex '%s' is already in use by another shape key" % flexName)
+            # revert to previous selection
+            for row in range(self.shapeKeysTable.rowCount()):
+                uniqueIdItem = self.shapeKeysTable.item(row, 5)
+                if uniqueIdItem.text() == self.currentShapeKeyUniqueId:
+                    flexItem = self.shapeKeysTable.item(row, 1)
+                    currentFlexName = flexItem.text()
+                    for i in range(self.flexEdit.count()):
+                        if self.flexEdit.itemText(i) == currentFlexName:
+                            self.flexEdit.setCurrentIndex(i)
+                            break
+                    break
+            return
         shots = sfmApp.GetShots()
         for shot in shots:
             if shot.GetName() == shotName:
@@ -870,6 +1026,10 @@ class ShapeKeysWindow(QtGui.QWidget):
         shotName = self.shotDropdown.currentText()
         animSetName = self.animationSetDropdown.currentText()
         shots = sfmApp.GetShots()
+        undoDisabled = False
+        if dm.IsUndoEnabled():
+            dm.SetUndoEnabled(False)
+            undoDisabled = True
         for shot in shots:
             if shot.GetName() == shotName:
                 shapeKeys = getattr(shot, "shapeKeys", None)
@@ -878,19 +1038,17 @@ class ShapeKeysWindow(QtGui.QWidget):
                 for i in range(shapeKeys.count()):
                     if shapeKeys[i].GetId().__str__() == self.currentShapeKeyUniqueId and shapeKeys[i].animationSet.name.GetValue() == animSetName:
                         if hasattr(shapeKeys[i], "maxBoneRange") and shapeKeys[i].maxBoneRange.GetValue() == value:
+                            if undoDisabled:
+                                dm.SetUndoEnabled(True)
                             return # no change
                         # Found the shape key, update its max bone range
-                        undoDisabled = False
-                        if dm.IsUndoEnabled():
-                            dm.SetUndoEnabled(False)
-                            undoDisabled = True
                         if not hasattr(shapeKeys[i], "maxBoneRange"):
                             shapeKeys[i].AddAttribute("maxBoneRange", vs.AT_FLOAT)
                         shapeKeys[i].maxBoneRange.SetValue(value)
-                        if undoDisabled:
-                            dm.SetUndoEnabled(True)
                         break
                 break
+        if undoDisabled:
+            dm.SetUndoEnabled(True)
         self.generateOperators()
         #self.refreshShapeKeys()
     def clampChanged(self, state):
@@ -898,6 +1056,10 @@ class ShapeKeysWindow(QtGui.QWidget):
         shotName = self.shotDropdown.currentText()
         animSetName = self.animationSetDropdown.currentText()
         shots = sfmApp.GetShots()
+        undoDisabled = False
+        if dm.IsUndoEnabled():
+            dm.SetUndoEnabled(False)
+            undoDisabled = True
         for shot in shots:
             if shot.GetName() == shotName:
                 shapeKeys = getattr(shot, "shapeKeys", None)
@@ -905,15 +1067,11 @@ class ShapeKeysWindow(QtGui.QWidget):
                     break
                 for i in range(shapeKeys.count()):
                     if shapeKeys[i].GetId().__str__() == self.currentShapeKeyUniqueId and shapeKeys[i].animationSet.name.GetValue() == animSetName:
-                        undoDisabled = False
-                        if dm.IsUndoEnabled():
-                            dm.SetUndoEnabled(False)
-                            undoDisabled = True
                         shapeKeys[i].clamp.SetValue(state)
-                        if undoDisabled:
-                            dm.SetUndoEnabled(True)
                         break
                 break
+        if undoDisabled:
+            dm.SetUndoEnabled(True)
         self.generateOperators()
         #self.refreshShapeKeys()
     def onShapeKeyActiveChanged(self, checked, shapeKeyUniqueId):
@@ -941,6 +1099,7 @@ class ShapeKeysWindow(QtGui.QWidget):
                             dm.SetUndoEnabled(True)
                         break
                 break
+        self.generateOperators()
 
 def createShapeKeysWindow():
     try:
@@ -961,7 +1120,7 @@ try:
     if firstWindow is None:
         createShapeKeysWindow()
     else:
-        dialog = QtGui.QMessageBox.warning(None, "Shape Keys Window: Error", "Shape Keys Window is already open.\n\nIf you are a developer, click Yes to forcibly open a new instance.\n\nOtherwise, click No to close this message.", QtGui.QMessageBox.Yes | QtGui.QMessageBox.No, QtGui.QMessageBox.No)
+        dialog = QtGui.QMessageBox.warning(None, "Shape Keys: Error", "The Shape Keys window is already open.\nIf you are a developer, click Yes to forcibly open a new instance.\nOtherwise, click No to close this message.\n\nIf you are using Autoinit Manager, click on \"Shape Keys\" in the Windows menu to show it.", QtGui.QMessageBox.Yes | QtGui.QMessageBox.No, QtGui.QMessageBox.No)
         if dialog == QtGui.QMessageBox.Yes:
             # Close existing window
             try:
@@ -973,8 +1132,7 @@ try:
                 pass
             createShapeKeysWindow()
     try:
-        for windowName in firstWindow.windows.keys():
-            sfmApp.ShowTabWindow(windowName)
+        sfmApp.ShowTabWindow("ShapeKeysWindow")
     except:
         pass
 except Exception  as e:
