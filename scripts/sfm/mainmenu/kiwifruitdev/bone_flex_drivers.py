@@ -38,7 +38,7 @@ except NameError:
     from sfm_runtime_builtins import *
 
 boneFlexDriversWindow = None
-boneFlexDriversVersion = "1.0.0"
+boneFlexDriversVersion = "1.1.0"
 
 class BoneFlexDriversWindow(QtGui.QWidget):
     def __init__(self):
@@ -165,15 +165,16 @@ class BoneFlexDriversWindow(QtGui.QWidget):
         # Bone (QComboBox, to be populated with bones from the animation set)
         # Bone Axis (QComboBox with X, Y, Z)
         # Min Bone Range (QDoubleSpinBox), Max Bone Range (QDoubleSpinBox), Clamp (QCheckBox)
-        self.boneFlexDriverDetailsGroup = QtGui.QGroupBox()
-        self.boneFlexDriverDetailsGroup.setFlat(False)
-        self.boneFlexDriverDetailsGroup.setSizePolicy(QtGui.QSizePolicy.Expanding, QtGui.QSizePolicy.Expanding)
+        self.boneFlexDriverDetailsGroup = QtGui.QScrollArea()
         self.boneFlexDriverDetailsGroup.setContentsMargins(0, 0, 0, 0)
+        self.boneFlexDriverDetailsGroup.setWidgetResizable(True)
         self.boneFlexDriverDetailsGroup.setEnabled(False)
+        self.boneFlexDriverDetailsGroupWidget = QtGui.QWidget()
+        self.boneFlexDriverDetailsGroup.setWidget(self.boneFlexDriverDetailsGroupWidget)
         self.bottomLayout.addWidget(self.boneFlexDriverDetailsGroup)
         self.boneFlexDriverDetailsLayout = QtGui.QFormLayout()
         self.boneFlexDriverDetailsLayout.setContentsMargins(5, 5, 5, 5)
-        self.boneFlexDriverDetailsGroup.setLayout(self.boneFlexDriverDetailsLayout)
+        self.boneFlexDriverDetailsGroupWidget.setLayout(self.boneFlexDriverDetailsLayout)
         self.boneFlexDriverNameEdit = QtGui.QLineEdit()
         self.boneFlexDriverNameEdit.setToolTip("Name of the bone flex driver")
         self.boneFlexDriverNameEdit.textChanged.connect(self.boneFlexDriverNameChanged)
@@ -202,11 +203,24 @@ class BoneFlexDriversWindow(QtGui.QWidget):
         self.boneEdit.setToolTip("Select the bone to influence the flex value.")
         self.boneEdit.currentIndexChanged.connect(self.boneChanged)
         self.boneFlexDriverDetailsLayout.addRow("Bone:", self.boneEdit)
+        self.boneMovementChoice = QtGui.QComboBox()
+        self.boneMovementChoice.setToolTip("Select the type of movement for this bone. Use 'Rotate' for rotational movement, or 'Translate' for positional movement.")
+        self.boneMovementChoice.addItems(["Rotate", "Translate"])
+        self.boneMovementChoice.setCurrentIndex(0)
+        self.boneMovementChoice.currentIndexChanged.connect(self.boneMovementChanged)
+        self.boneFlexDriverDetailsLayout.addRow("Bone Movement Type:", self.boneMovementChoice)
         self.boneAxisEdit = QtGui.QComboBox()
-        self.boneAxisEdit.setToolTip("Select the axis of rotation for this bone.")
+        self.boneAxisEdit.setToolTip("Select the axis of movement for this bone.")
         self.boneAxisEdit.addItems(["X", "Y", "Z"])
         self.boneAxisEdit.currentIndexChanged.connect(self.boneAxisChanged)
         self.boneFlexDriverDetailsLayout.addRow("Bone Axis:", self.boneAxisEdit)
+        self.boneDefaultPositionSpin = QtGui.QDoubleSpinBox()
+        self.boneDefaultPositionSpin.setToolTip("The default position on the chosen axis for this bone, only used for the Translate movement type.")
+        self.boneDefaultPositionSpin.setRange(-2147483648.0, 2147483647.0)
+        self.boneDefaultPositionSpin.setSingleStep(1.0)
+        self.boneDefaultPositionSpin.valueChanged.connect(self.boneDefaultPositionChanged)
+        self.boneDefaultPositionSpin.setEnabled(False)
+        self.boneFlexDriverDetailsLayout.addRow("Bone Default Position:", self.boneDefaultPositionSpin)
         self.minBoneRangeSpin = QtGui.QDoubleSpinBox()
         self.minBoneRangeSpin.setToolTip("The minimum rotation on the chosen axis for this bone for the flex value to reach 0.")
         self.minBoneRangeSpin.setRange(-360.0, 360.0)
@@ -230,6 +244,74 @@ class BoneFlexDriversWindow(QtGui.QWidget):
         self.layout.addWidget(self.statusBar)
 
         self.refreshBoneFlexDrivers()
+    def boneMovementChanged(self, index):
+        if self.currentBoneFlexDriverUniqueId == "00000000-0000-0000-0000-000000000000":
+            return
+        # set tooltips 
+        if index == 0:
+            self.boneAxisEdit.setToolTip("Select the axis of rotation for this bone.")
+            self.minBoneRangeSpin.setToolTip("The minimum rotation on the chosen axis for this bone for the flex value to reach 0.")
+            self.minBoneRangeSpin.setRange(-360.0, 360.0)
+            if self.maxBoneRangeSpin.value() < -360.0 or self.maxBoneRangeSpin.value() > 360.0:
+                self.minBoneRangeSpin.setValue(0.0)
+            self.maxBoneRangeSpin.setToolTip("The maximum rotation on the chosen axis for this bone for the flex value to reach 1.")
+            self.maxBoneRangeSpin.setRange(-360.0, 360.0)
+            if self.maxBoneRangeSpin.value() == 16.0:
+                self.maxBoneRangeSpin.setValue(90.0)
+            # disable boneDefaultPositionSpin
+            self.boneDefaultPositionSpin.setEnabled(False)
+        else:
+            self.boneAxisEdit.setToolTip("Select the axis of translation for this bone.")
+            self.minBoneRangeSpin.setToolTip("The minimum position on the chosen axis for this bone for the flex value to reach 0.")
+            self.minBoneRangeSpin.setRange(-2147483648.0, 2147483647.0)
+            self.maxBoneRangeSpin.setToolTip("The maximum position on the chosen axis for this bone for the flex value to reach 1.")
+            self.maxBoneRangeSpin.setRange(-2147483648.0, 2147483647.0)
+            if self.maxBoneRangeSpin.value() == 90.0:
+                self.minBoneRangeSpin.setValue(0.0)
+                self.maxBoneRangeSpin.setValue(16.0)
+            # enable boneDefaultPositionSpin
+            self.boneDefaultPositionSpin.setEnabled(True)
+        shotName = self.shotDropdown.currentText()
+        animSetName = self.animationSetDropdown.currentText()
+        shots = sfmApp.GetShots()
+        dm.SetUndoEnabled(False)
+        for shot in shots:
+            if shot.GetName() == shotName:
+                boneFlexDrivers = getattr(shot, "boneFlexDrivers", None)
+                if boneFlexDrivers is None:
+                    break
+                for i in range(boneFlexDrivers.count()):
+                    if boneFlexDrivers[i].GetId().__str__() == self.currentBoneFlexDriverUniqueId and boneFlexDrivers[i].animationSet.name.GetValue() == animSetName:
+                        # Found the bone flex driver, update movement type
+                        if not hasattr(boneFlexDrivers[i], "usePosition"):
+                            boneFlexDrivers[i].AddAttribute("usePosition", vs.AT_BOOL).SetValue(False)
+                        boneFlexDrivers[i].usePosition.SetValue(index == 1)
+                        break
+                break
+        dm.SetUndoEnabled(True)
+        self.generateOperators()
+    def boneDefaultPositionChanged(self, value):
+        if self.currentBoneFlexDriverUniqueId == "00000000-0000-0000-0000-000000000000":
+            return
+        shotName = self.shotDropdown.currentText()
+        animSetName = self.animationSetDropdown.currentText()
+        shots = sfmApp.GetShots()
+        dm.SetUndoEnabled(False)
+        for shot in shots:
+            if shot.GetName() == shotName:
+                boneFlexDrivers = getattr(shot, "boneFlexDrivers", None)
+                if boneFlexDrivers is None:
+                    break
+                for i in range(boneFlexDrivers.count()):
+                    if boneFlexDrivers[i].GetId().__str__() == self.currentBoneFlexDriverUniqueId and boneFlexDrivers[i].animationSet.name.GetValue() == animSetName:
+                        # Found the bone flex driver, update default position
+                        if not hasattr(boneFlexDrivers[i], "boneDefaultPosition"):
+                            boneFlexDrivers[i].AddAttribute("boneDefaultPosition", vs.AT_FLOAT).SetValue(0.0)
+                        boneFlexDrivers[i].boneDefaultPosition.SetValue(value)
+                        break
+                break
+        dm.SetUndoEnabled(True)
+        self.generateOperators()
     def generateOperators(self):
         """
         Regenerates SFM operators for all bone flex drivers in all shots.
@@ -244,6 +326,8 @@ class BoneFlexDriversWindow(QtGui.QWidget):
             if boneFlexDrivers is None:
                 continue
             for i in range(boneFlexDrivers.count()):
+                if not boneFlexDrivers[i].active.GetValue():
+                    continue
                 generatedOperators = getattr(boneFlexDrivers[i], "generatedOperators", None)
                 if generatedOperators is None:
                     continue
@@ -257,6 +341,8 @@ class BoneFlexDriversWindow(QtGui.QWidget):
                 transformInput = vs.CreateElement("DmeAttributeReference", (prefix + "transform_input").encode('utf-8'), shot.GetFileId())
                 transform.SetValue("input", transformInput)
                 invalidAnimationSet = False
+                if not hasattr(boneFlexDrivers[i], "usePosition"):
+                    boneFlexDrivers[i].AddAttribute("usePosition", vs.AT_BOOL).SetValue(False)
                 for j in range(boneFlexDrivers[i].animationSet.controls.count()):
                     if getattr(boneFlexDrivers[i].animationSet, "gameModel", None) is None:
                         # remove this bone flex driver, as its animation set is invalid
@@ -279,32 +365,60 @@ class BoneFlexDriversWindow(QtGui.QWidget):
                         else:
                             boneFlexDrivers[i].animationSet.controls[j].channel.toAttribute.SetValue(newValue)
                     if controlName == boneFlexDrivers[i].boneName.GetValue():
-                        transformInput.SetValue("element", boneFlexDrivers[i].animationSet.controls[j].orientationChannel.toElement)
+                        # position or rotation?
+                        if boneFlexDrivers[i].usePosition.GetValue():
+                            transformInput.SetValue("element", boneFlexDrivers[i].animationSet.controls[j].positionChannel.toElement)
+                        else:
+                            transformInput.SetValue("element", boneFlexDrivers[i].animationSet.controls[j].orientationChannel.toElement)
                         break
                 if invalidAnimationSet:
                     continue # skip the rest of this loop iteration
-                transformInput.attribute.SetValue("orientation")
+                if boneFlexDrivers[i].usePosition.GetValue():
+                    transformInput.attribute.SetValue("position")
+                else:
+                    transformInput.attribute.SetValue("orientation")
                 transformOutput = vs.CreateElement("DmeAttributeReference", (prefix + "transform_output").encode('utf-8'), shot.GetFileId())
                 transform.outputs.AddToTail(transformOutput)
-                unpack = vs.CreateElement("DmeUnpackQuaternionOperator", (prefix + "unpack").encode('utf-8'), shot.GetFileId())
+                unpackOperator = "DmeUnpackQuaternionOperator"
+                if boneFlexDrivers[i].usePosition.GetValue():
+                    unpackOperator = "DmeUnpackVector3Operator"
+                unpack = vs.CreateElement(unpackOperator, (prefix + "unpack").encode('utf-8'), shot.GetFileId())
                 unpack = generatedOperators[generatedOperators.AddToTail(unpack)]
                 transformOutput.SetValue("element", unpack)
-                transformOutput.attribute.SetValue("quaternion")
-                wName = prefix + "w"
-                w = vs.CreateElement("DmeConnectionOperator", (wName).encode('utf-8'), shot.GetFileId())
-                w = generatedOperators[generatedOperators.AddToTail(w)]
-                wInput = vs.CreateElement("DmeAttributeReference", (prefix + "w_input").encode('utf-8'), shot.GetFileId())
-                w.SetValue("input", wInput)
-                wInput.SetValue("element", unpack)
-                wInput.attribute.SetValue("w")
-                wOutput = vs.CreateElement("DmeAttributeReference", (prefix + "w_output").encode('utf-8'), shot.GetFileId())
-                w.outputs.AddToTail(wOutput)
+                if boneFlexDrivers[i].usePosition.GetValue():
+                    transformOutput.attribute.SetValue("vector")
+                else:
+                    transformOutput.attribute.SetValue("quaternion")
                 eval = vs.CreateElement("DmeExpressionOperator", (prefix + "eval").encode('utf-8'), shot.GetFileId())
-                wOutput.SetValue("element", eval)
                 eval = generatedOperators[generatedOperators.AddToTail(eval)]
+                eval.AddAttribute("x", vs.AT_FLOAT)
+                eval.AddAttribute("y", vs.AT_FLOAT)
+                eval.AddAttribute("z", vs.AT_FLOAT)
+                # if rotate is selected, use quaternion to euler conversion
                 isX = "rtod(atan2(2*(w*x + y*z), 1 - 2*(x*x + y*y)))"
                 isY = "rtod(asin(2*(w*y - z*x)))"
                 isZ = "rtod(atan2(2*(w*z + x*y), 1 - 2*(y*y + z*z)))"
+                if boneFlexDrivers[i].usePosition.GetValue():
+                    if not hasattr(boneFlexDrivers[i], "boneDefaultPosition"):
+                        boneFlexDrivers[i].AddAttribute("boneDefaultPosition", vs.AT_FLOAT).SetValue(0.0)
+                    # if translate is selected, use self.boneDefaultPositionSpin value as a base and the min/max bone ranges as offsets
+                    isX = "(x - %f)" % boneFlexDrivers[i].boneDefaultPosition.GetValue()
+                    isY = "(y - %f)" % boneFlexDrivers[i].boneDefaultPosition.GetValue()
+                    isZ = "(z - %f)" % boneFlexDrivers[i].boneDefaultPosition.GetValue()
+                else:
+                    # create w attribute for quaternion
+                    eval.AddAttribute("w", vs.AT_FLOAT)
+                    wName = prefix + "w"
+                    w = vs.CreateElement("DmeConnectionOperator", (wName).encode('utf-8'), shot.GetFileId())
+                    w = generatedOperators[generatedOperators.AddToTail(w)]
+                    wInput = vs.CreateElement("DmeAttributeReference", (prefix + "w_input").encode('utf-8'), shot.GetFileId())
+                    w.SetValue("input", wInput)
+                    wInput.SetValue("element", unpack)
+                    wInput.attribute.SetValue("w")
+                    wOutput = vs.CreateElement("DmeAttributeReference", (prefix + "w_output").encode('utf-8'), shot.GetFileId())
+                    w.outputs.AddToTail(wOutput)
+                    wOutput.SetValue("element", eval)
+                    wOutput.attribute.SetValue("w")
                 axisExpr = {"X": isX, "Y": isY, "Z": isZ}.get(boneFlexDrivers[i].boneAxis.GetValue().upper(), isX)
                 axisExpr = "ramp(%s, %f, %f)" % (axisExpr, boneFlexDrivers[i].minBoneRange.GetValue(), boneFlexDrivers[i].maxBoneRange.GetValue())
                 if boneFlexDrivers[i].clamp.GetValue():
@@ -312,11 +426,6 @@ class BoneFlexDriversWindow(QtGui.QWidget):
                 # Map flex range from minFlexRange to maxFlexRange
                 axisExpr = "lerp(%s, %f, %f)" % (axisExpr, boneFlexDrivers[i].minFlexRange.GetValue(), boneFlexDrivers[i].maxFlexRange.GetValue())
                 eval.expr.SetValue(axisExpr)
-                eval.AddAttribute("w", vs.AT_FLOAT)
-                eval.AddAttribute("x", vs.AT_FLOAT)
-                eval.AddAttribute("y", vs.AT_FLOAT)
-                eval.AddAttribute("z", vs.AT_FLOAT)
-                wOutput.attribute.SetValue("w")
                 x = vs.CreateElement("DmeConnectionOperator", (prefix + "x").encode('utf-8'), shot.GetFileId())
                 x = generatedOperators[generatedOperators.AddToTail(x)]
                 xInput = vs.CreateElement("DmeAttributeReference", (prefix + "x_input").encode('utf-8'), shot.GetFileId())
@@ -361,9 +470,8 @@ class BoneFlexDriversWindow(QtGui.QWidget):
                         resultOutput.SetValue("element", boneFlexDrivers[i].animationSet.gameModel.globalFlexControllers[j])
                         break
                 resultOutput.attribute.SetValue("flexWeight")
-                if boneFlexDrivers[i].active.GetValue():
-                    for j in range(generatedOperators.count()):
-                        shot.operators.AddToTail(generatedOperators[j])
+                for j in range(generatedOperators.count()):
+                    shot.operators.AddToTail(generatedOperators[j])
         dm.SetUndoEnabled(True)
 
     def refreshBoneFlexDrivers(self):
@@ -534,6 +642,7 @@ class BoneFlexDriversWindow(QtGui.QWidget):
                                     self.boneEdit.addItem(controlName)
                                     if controlName == matchingBone:
                                         self.boneEdit.setCurrentIndex(self.boneEdit.count() - 1)
+                        self.boneMovementChoice.setCurrentIndex(1 if (hasattr(boneFlexDrivers[i], "usePosition") and boneFlexDrivers[i].usePosition.GetValue()) else 0)
                         axis = boneFlexDrivers[i].boneAxis.GetValue().upper() if hasattr(boneFlexDrivers[i], "boneAxis") else "X"
                         axisIndex = {"X": 0, "Y": 1, "Z": 2}.get(axis, 0)
                         self.boneAxisEdit.setCurrentIndex(axisIndex)
@@ -582,15 +691,17 @@ class BoneFlexDriversWindow(QtGui.QWidget):
                                 continue
                             newBoneFlexDriver = vs.CreateElement("DmElement", name.encode('utf-8'), shot.GetFileId())
                             newBoneFlexDriver = boneFlexDrivers[boneFlexDrivers.AddToTail(newBoneFlexDriver)]
-                            newBoneFlexDriver.AddAttribute("active", vs.AT_BOOL).SetValue(boneFlexDriverData.get("active", True))
+                            newBoneFlexDriver.AddAttribute("active", vs.AT_BOOL).SetValue(boneFlexDriverData.get("active", False))
                             newBoneFlexDriver.AddAttribute("flexName", vs.AT_STRING).SetValue(flexName.encode('utf-8'))
                             newBoneFlexDriver.AddAttribute("boneName", vs.AT_STRING).SetValue(boneName.encode('utf-8'))
                             newBoneFlexDriver.AddAttribute("minFlexRange", vs.AT_FLOAT).SetValue(boneFlexDriverData.get("minFlexRange", 0.0))
                             newBoneFlexDriver.AddAttribute("maxFlexRange", vs.AT_FLOAT).SetValue(boneFlexDriverData.get("maxFlexRange", 1.0))
+                            newBoneFlexDriver.AddAttribute("usePosition", vs.AT_BOOL).SetValue(boneFlexDriverData.get("usePosition", True))
                             newBoneFlexDriver.AddAttribute("boneAxis", vs.AT_STRING).SetValue(boneFlexDriverData.get("boneAxis", "X").upper().encode('utf-8'))
                             newBoneFlexDriver.AddAttribute("minBoneRange", vs.AT_FLOAT).SetValue(boneFlexDriverData.get("minBoneRange", 0.0))
                             newBoneFlexDriver.AddAttribute("maxBoneRange", vs.AT_FLOAT).SetValue(boneFlexDriverData.get("maxBoneRange", 90.0))
                             newBoneFlexDriver.AddAttribute("clamp", vs.AT_BOOL).SetValue(boneFlexDriverData.get("clamp", True))
+                            newBoneFlexDriver.AddAttribute("boneDefaultPosition", vs.AT_FLOAT).SetValue(boneFlexDriverData.get("boneDefaultPosition", 0.0))
                             newBoneFlexDriver.AddAttribute("generatedOperators", vs.AT_ELEMENT_ARRAY)
                             animationSetAttribute = newBoneFlexDriver.AddAttribute("animationSet", vs.AT_ELEMENT)
                             for i in range(shot.animationSets.count()):
@@ -626,10 +737,12 @@ class BoneFlexDriversWindow(QtGui.QWidget):
                             "boneName": boneFlexDrivers[i].boneName.GetValue(),
                             "minFlexRange": boneFlexDrivers[i].minFlexRange.GetValue() if hasattr(boneFlexDrivers[i], "minFlexRange") else 0.0,
                             "maxFlexRange": boneFlexDrivers[i].maxFlexRange.GetValue() if hasattr(boneFlexDrivers[i], "maxFlexRange") else 1.0,
+                            "usePosition": boneFlexDrivers[i].usePosition.GetValue() if hasattr(boneFlexDrivers[i], "usePosition") else False,
                             "boneAxis": boneFlexDrivers[i].boneAxis.GetValue() if hasattr(boneFlexDrivers[i], "boneAxis") else "X",
                             "minBoneRange": boneFlexDrivers[i].minBoneRange.GetValue() if hasattr(boneFlexDrivers[i], "minBoneRange") else 0.0,
                             "maxBoneRange": boneFlexDrivers[i].maxBoneRange.GetValue() if hasattr(boneFlexDrivers[i], "maxBoneRange") else 90.0,
                             "clamp": boneFlexDrivers[i].clamp.GetValue() if hasattr(boneFlexDrivers[i], "clamp") else True,
+                            "boneDefaultPosition": boneFlexDrivers[i].boneDefaultPosition.GetValue() if hasattr(boneFlexDrivers[i], "boneDefaultPosition") else 0.0,
                         }
                         boneFlexDriversToSave.append(boneFlexDriverData)
                 if not boneFlexDriversToSave:
@@ -724,10 +837,12 @@ class BoneFlexDriversWindow(QtGui.QWidget):
                     newBoneFlexDriver.AddAttribute("boneName", vs.AT_STRING).SetValue(boneName.encode('utf-8'))
                     newBoneFlexDriver.AddAttribute("minFlexRange", vs.AT_FLOAT).SetValue(0.0)
                     newBoneFlexDriver.AddAttribute("maxFlexRange", vs.AT_FLOAT).SetValue(1.0)
+                    newBoneFlexDriver.AddAttribute("usePosition", vs.AT_BOOL).SetValue(False)
                     newBoneFlexDriver.AddAttribute("boneAxis", vs.AT_STRING).SetValue("X".encode('utf-8'))
                     newBoneFlexDriver.AddAttribute("minBoneRange", vs.AT_FLOAT).SetValue(0.0)
                     newBoneFlexDriver.AddAttribute("maxBoneRange", vs.AT_FLOAT).SetValue(90.0)
                     newBoneFlexDriver.AddAttribute("clamp", vs.AT_BOOL).SetValue(True)
+                    newBoneFlexDriver.AddAttribute("boneDefaultPosition", vs.AT_FLOAT).SetValue(0.0)
                     newBoneFlexDriver.AddAttribute("generatedOperators", vs.AT_ELEMENT_ARRAY)
                     for i in range(shot.animationSets.count()):
                         if shot.animationSets[i].GetName() == animSetName:

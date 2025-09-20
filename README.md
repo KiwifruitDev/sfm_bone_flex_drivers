@@ -3,7 +3,7 @@ Map bones to flexes, just like shape key drivers!
 
 This script replicates the [$boneflexdriver](https://developer.valvesoftware.com/wiki/$boneflexdriver) QC command for use in Source Filmmaker.
 
-This allows you to control flexes automatically using bone rotation, replicating the shape key driver/control bone feature found in Blender.
+This allows you to control flexes automatically using a bone's position or rotation, replicating the shape key driver/control bone feature found in Blender.
 
 Video above provided by [Smug Bastard](https://steamcommunity.com/profiles/76561198027986401).
 
@@ -20,11 +20,11 @@ Each bone flex driver will be listed in the window, where you can select and edi
 
 Click "Add" to add a new bone flex driver using a bone and flex, though flexes cannot be shared between multiple drivers.
 
-After setting up a bone flex driver, you may choose an axis (X, Y, or Z) and set the minimum and maximum rotation values for the bone.
+After setting up a bone flex driver, you may choose an axis (X, Y, or Z), set which movement type to use, and set the minimum and maximum values for the bone.
 
 The "clamp" option is available to restrict the flex value between 0 and 1, and you may also set minimum and maximum flex values.
 
-The flex value will be calculated based on the bone's rotation within the specified range, even without the script running.
+The flex value will be calculated based on the bone's position or rotation within the specified range, even without the script running.
 
 ## Known Issues
 When using an animation set affected by a rig script with bone flex drivers, you may face crashes in SFM.
