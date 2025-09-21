@@ -5,8 +5,6 @@ This script replicates the [$boneflexdriver](https://developer.valvesoftware.com
 
 This allows you to control flexes automatically using a bone's position or rotation, replicating the shape key driver/control bone feature found in Blender.
 
-Video above provided by [Smug Bastard](https://steamcommunity.com/profiles/76561198027986401).
-
 ## Setup
 *(Optional) Install [Autoinit Manager](https://steamcommunity.com/sharedfiles/filedetails/?id=3400621327) and activate this script within it.*
 
